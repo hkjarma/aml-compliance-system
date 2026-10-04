@@ -16,6 +16,9 @@ const fallbackAlerts = [
     score: 92,
     severity: 'critical',
     reasons: ['Large outbound transfer', 'High-risk settlement patterns'],
+    country: 'US',
+    amount: '$22,000',
+    channel: 'Wire',
   },
   {
     alert_id: 'alert-txn-1002',
@@ -24,6 +27,9 @@ const fallbackAlerts = [
     score: 76,
     severity: 'high',
     reasons: ['Cash channel', 'High-risk jurisdiction: RU'],
+    country: 'RU',
+    amount: '$14,000',
+    channel: 'Cash',
   },
   {
     alert_id: 'alert-txn-1004',
@@ -32,6 +38,9 @@ const fallbackAlerts = [
     score: 81,
     severity: 'high',
     reasons: ['Crypto channel', 'Round-trip funds movement suspected'],
+    country: 'CN',
+    amount: '$32,000',
+    channel: 'Crypto',
   },
 ];
 
@@ -42,6 +51,8 @@ const fallbackCases = [
     status: 'open',
     analyst: 'N. Patel',
     summary: 'Large outbound transfer with unusual payment behavior.',
+    priority: 'High',
+    age: '1h 20m',
   },
   {
     case_id: 'case-002',
@@ -49,6 +60,17 @@ const fallbackCases = [
     status: 'pending',
     analyst: 'M. Gomez',
     summary: 'Cash-intensive inbound transaction tied to high-risk jurisdiction.',
+    priority: 'Critical',
+    age: '3h 05m',
+  },
+  {
+    case_id: 'case-003',
+    account_id: 'acct-07',
+    status: 'review',
+    analyst: 'S. Chen',
+    summary: 'Recurring round-trip pattern across multiple entities.',
+    priority: 'Medium',
+    age: '5h 41m',
   },
 ];
 
@@ -57,6 +79,8 @@ function App() {
   const [alerts, setAlerts] = useState(fallbackAlerts);
   const [cases, setCases] = useState(fallbackCases);
   const [health, setHealth] = useState({ status: 'loading' });
+  const [selectedCase, setSelectedCase] = useState(fallbackCases[0]);
+  const [activeFilter, setActiveFilter] = useState('All');
 
   useEffect(() => {
     const loadData = async () => {
@@ -82,7 +106,9 @@ function App() {
         }
 
         if (casesRes.ok) {
-          setCases(await casesRes.json());
+          const loadedCases = await casesRes.json();
+          setCases(loadedCases);
+          if (loadedCases.length) setSelectedCase(loadedCases[0]);
         }
       } catch (error) {
         console.warn('Using fallback AML dashboard data.', error);
@@ -91,6 +117,11 @@ function App() {
 
     loadData();
   }, []);
+
+  const filteredCases = useMemo(() => {
+    if (activeFilter === 'All') return cases;
+    return cases.filter((item) => item.status === activeFilter.toLowerCase());
+  }, [cases, activeFilter]);
 
   const highRiskCount = useMemo(
     () => alerts.filter((alert) => ['high', 'critical'].includes(alert.severity)).length,
@@ -104,8 +135,11 @@ function App() {
           <p className="eyebrow">COMPLIANCE OPERATIONS</p>
           <h1>AML Analyst Dashboard</h1>
         </div>
-        <div className={`status-badge ${health.status === 'ok' ? 'online' : ''}`}>
-          {health.status === 'ok' ? 'API Online' : 'Demo Mode'}
+        <div className="topbar-actions">
+          <div className={`status-badge ${health.status === 'ok' ? 'online' : ''}`}>
+            {health.status === 'ok' ? 'API Online' : 'Demo Mode'}
+          </div>
+          <button className="primary-button">+ New alert</button>
         </div>
       </header>
 
@@ -129,10 +163,10 @@ function App() {
       </section>
 
       <section className="content-grid">
-        <div className="panel">
+        <div className="panel panel-lg">
           <div className="panel-header">
             <h2>Active alerts</h2>
-            <button>Escalate all</button>
+            <button className="secondary-button">Escalate all</button>
           </div>
 
           <div className="alert-list">
@@ -142,9 +176,19 @@ function App() {
                   <span className={`severity ${alert.severity}`}>{alert.severity}</span>
                   <strong>{alert.alert_id}</strong>
                 </div>
-                <p>Account: {alert.account_id}</p>
-                <p>Transaction: {alert.transaction_id}</p>
-                <p>Score: {alert.score}</p>
+
+                <div className="alert-meta">
+                  <span>Account: {alert.account_id}</span>
+                  <span>Txn: {alert.transaction_id}</span>
+                </div>
+
+                <div className="alert-meta compact">
+                  <span>{alert.country}</span>
+                  <span>{alert.channel}</span>
+                  <span>{alert.amount}</span>
+                </div>
+
+                <p className="score-line">Score: {alert.score}</p>
                 <ul>
                   {alert.reasons.map((reason) => (
                     <li key={reason}>{reason}</li>
@@ -155,24 +199,78 @@ function App() {
           </div>
         </div>
 
-        <div className="panel">
-          <div className="panel-header">
-            <h2>Open investigations</h2>
-            <button>New case</button>
+        <aside className="panel panel-side">
+          <div className="panel-header sticky-header">
+            <h2>Investigation queue</h2>
+            <button className="secondary-button">New case</button>
+          </div>
+
+          <div className="filter-row">
+            {['All', 'Open', 'Pending', 'Review'].map((filter) => (
+              <button
+                key={filter}
+                className={activeFilter === filter ? 'filter-button active' : 'filter-button'}
+                onClick={() => setActiveFilter(filter)}
+              >
+                {filter}
+              </button>
+            ))}
           </div>
 
           <div className="case-list">
-            {cases.map((caseItem) => (
-              <div key={caseItem.case_id} className="case-card">
+            {filteredCases.map((caseItem) => (
+              <button
+                key={caseItem.case_id}
+                className={selectedCase?.case_id === caseItem.case_id ? 'case-card selected' : 'case-card'}
+                onClick={() => setSelectedCase(caseItem)}
+              >
                 <div className="case-row">
                   <strong>{caseItem.case_id}</strong>
                   <span className={`case-status ${caseItem.status}`}>{caseItem.status}</span>
                 </div>
                 <p>Account: {caseItem.account_id}</p>
                 <p>Analyst: {caseItem.analyst}</p>
-                <p>{caseItem.summary}</p>
-              </div>
+                <div className="case-footer">
+                  <span className="priority-pill">{caseItem.priority}</span>
+                  <span>{caseItem.age}</span>
+                </div>
+              </button>
             ))}
+          </div>
+        </aside>
+      </section>
+
+      <section className="panel detail-panel">
+        <div className="panel-header detail-header">
+          <div>
+            <p className="eyebrow subtle">CASE DETAIL</p>
+            <h2>{selectedCase?.case_id}</h2>
+          </div>
+          <div className="detail-actions">
+            <button className="secondary-button">Escalate</button>
+            <button className="primary-button">Close case</button>
+          </div>
+        </div>
+
+        <div className="detail-grid">
+          <div>
+            <div className="detail-row">
+              <span>Status</span>
+              <strong>{selectedCase?.status}</strong>
+            </div>
+            <div className="detail-row">
+              <span>Account</span>
+              <strong>{selectedCase?.account_id}</strong>
+            </div>
+            <div className="detail-row">
+              <span>Analyst</span>
+              <strong>{selectedCase?.analyst}</strong>
+            </div>
+          </div>
+
+          <div className="summary-box">
+            <h3>Investigation summary</h3>
+            <p>{selectedCase?.summary}</p>
           </div>
         </div>
       </section>
