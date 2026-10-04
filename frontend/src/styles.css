@@ -74,10 +74,17 @@ const fallbackCases = [
   },
 ];
 
+const fallbackSanctions = [
+  { id: 1, name: 'Blue Harbor', country: 'RU', category: 'entity' },
+  { id: 2, name: 'Flux Trading', country: 'CN', category: 'entity' },
+  { id: 3, name: 'Gulf Bell Ventures', country: 'IR', category: 'entity' },
+];
+
 function App() {
   const [summary, setSummary] = useState(fallbackSummary);
   const [alerts, setAlerts] = useState(fallbackAlerts);
   const [cases, setCases] = useState(fallbackCases);
+  const [sanctions, setSanctions] = useState(fallbackSanctions);
   const [health, setHealth] = useState({ status: 'loading' });
   const [selectedCase, setSelectedCase] = useState(fallbackCases[0]);
   const [activeFilter, setActiveFilter] = useState('All');
@@ -89,11 +96,12 @@ function App() {
   useEffect(() => {
     const loadData = async () => {
       try {
-        const [healthRes, summaryRes, alertsRes, casesRes] = await Promise.all([
+        const [healthRes, summaryRes, alertsRes, casesRes, sanctionsRes] = await Promise.all([
           fetch('/health'),
           fetch('/api/v1/risk/summary'),
           fetch('/api/v1/alerts'),
           fetch('/api/v1/cases'),
+          fetch('/api/v1/sanctions/watchlist'),
         ]);
 
         if (healthRes.ok) {
@@ -113,6 +121,10 @@ function App() {
           const loadedCases = await casesRes.json();
           setCases(loadedCases);
           if (loadedCases.length) setSelectedCase(loadedCases[0]);
+        }
+
+        if (sanctionsRes.ok) {
+          setSanctions(await sanctionsRes.json());
         }
       } catch (error) {
         console.warn('Using fallback AML dashboard data.', error);
@@ -304,6 +316,41 @@ function App() {
               </li>
             ))}
           </ul>
+        </div>
+      </section>
+
+      <section className="panel sanctions-panel">
+        <div className="panel-header">
+          <h2>Sanctions & KYC monitoring</h2>
+        </div>
+
+        <div className="sanctions-grid">
+          <div className="watchlist-box">
+            <h3>Sanctions watchlist</h3>
+            <ul>
+              {sanctions.map((item) => (
+                <li key={item.id}>
+                  <strong>{item.name}</strong> · {item.country || 'Unknown'} · {item.category}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="kyc-box">
+            <h3>KYC status</h3>
+            <div className="kyc-row">
+              <span>Account</span>
+              <strong>acct-02</strong>
+            </div>
+            <div className="kyc-row">
+              <span>Risk rating</span>
+              <strong>critical</strong>
+            </div>
+            <div className="kyc-row">
+              <span>Review state</span>
+              <strong>sanctions_review</strong>
+            </div>
+          </div>
         </div>
       </section>
 
