@@ -1,401 +1,328 @@
-:root {
-  font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  color: #e5ecf4;
-  background: #08111f;
-  line-height: 1.5;
-  font-weight: 400;
+import { useEffect, useMemo, useState } from 'react';
+
+const fallbackSummary = {
+  total_transactions: 4,
+  alerts_count: 3,
+  high_risk_count: 2,
+  average_score: 73.5,
+  top_risk_accounts: ['acct-01', 'acct-02', 'acct-03'],
+};
+
+const fallbackAlerts = [
+  {
+    alert_id: 'alert-txn-1001',
+    account_id: 'acct-01',
+    transaction_id: 'txn-1001',
+    score: 92,
+    severity: 'critical',
+    reasons: ['Large outbound transfer', 'High-risk settlement patterns'],
+    country: 'US',
+    amount: '$22,000',
+    channel: 'Wire',
+  },
+  {
+    alert_id: 'alert-txn-1002',
+    account_id: 'acct-02',
+    transaction_id: 'txn-1002',
+    score: 76,
+    severity: 'high',
+    reasons: ['Cash channel', 'High-risk jurisdiction: RU'],
+    country: 'RU',
+    amount: '$14,000',
+    channel: 'Cash',
+  },
+  {
+    alert_id: 'alert-txn-1004',
+    account_id: 'acct-03',
+    transaction_id: 'txn-1004',
+    score: 81,
+    severity: 'high',
+    reasons: ['Crypto channel', 'Round-trip funds movement suspected'],
+    country: 'CN',
+    amount: '$32,000',
+    channel: 'Crypto',
+  },
+];
+
+const fallbackCases = [
+  {
+    case_id: 'case-001',
+    account_id: 'acct-01',
+    status: 'open',
+    analyst: 'N. Patel',
+    summary: 'Large outbound transfer with unusual payment behavior.',
+    priority: 'High',
+    age: '1h 20m',
+  },
+  {
+    case_id: 'case-002',
+    account_id: 'acct-02',
+    status: 'pending',
+    analyst: 'M. Gomez',
+    summary: 'Cash-intensive inbound transaction tied to high-risk jurisdiction.',
+    priority: 'Critical',
+    age: '3h 05m',
+  },
+  {
+    case_id: 'case-003',
+    account_id: 'acct-07',
+    status: 'review',
+    analyst: 'S. Chen',
+    summary: 'Recurring round-trip pattern across multiple entities.',
+    priority: 'Medium',
+    age: '5h 41m',
+  },
+];
+
+function App() {
+  const [summary, setSummary] = useState(fallbackSummary);
+  const [alerts, setAlerts] = useState(fallbackAlerts);
+  const [cases, setCases] = useState(fallbackCases);
+  const [health, setHealth] = useState({ status: 'loading' });
+  const [selectedCase, setSelectedCase] = useState(fallbackCases[0]);
+  const [activeFilter, setActiveFilter] = useState('All');
+  const [notes, setNotes] = useState([
+    { id: 1, case_id: 'case-001', author: 'N. Patel', note: 'Analyst review indicates unusual outbound movement.' },
+    { id: 2, case_id: 'case-001', author: 'Compliance', note: 'Escalation recommended for investigative review.' },
+  ]);
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const [healthRes, summaryRes, alertsRes, casesRes] = await Promise.all([
+          fetch('/health'),
+          fetch('/api/v1/risk/summary'),
+          fetch('/api/v1/alerts'),
+          fetch('/api/v1/cases'),
+        ]);
+
+        if (healthRes.ok) {
+          const healthData = await healthRes.json();
+          setHealth(healthData);
+        }
+
+        if (summaryRes.ok) {
+          setSummary(await summaryRes.json());
+        }
+
+        if (alertsRes.ok) {
+          setAlerts(await alertsRes.json());
+        }
+
+        if (casesRes.ok) {
+          const loadedCases = await casesRes.json();
+          setCases(loadedCases);
+          if (loadedCases.length) setSelectedCase(loadedCases[0]);
+        }
+      } catch (error) {
+        console.warn('Using fallback AML dashboard data.', error);
+      }
+    };
+
+    loadData();
+  }, []);
+
+  useEffect(() => {
+    if (!selectedCase) return;
+    const loadNotes = async () => {
+      try {
+        const res = await fetch(`/api/v1/cases/${selectedCase.case_id}/notes`);
+        if (res.ok) {
+          const loadedNotes = await res.json();
+          setNotes(loadedNotes);
+        }
+      } catch (error) {
+        console.warn('Could not load case notes.', error);
+      }
+    };
+
+    loadNotes();
+  }, [selectedCase]);
+
+  const filteredCases = useMemo(() => {
+    if (activeFilter === 'All') return cases;
+    return cases.filter((item) => item.status === activeFilter.toLowerCase());
+  }, [cases, activeFilter]);
+
+  const highRiskCount = useMemo(
+    () => alerts.filter((alert) => ['high', 'critical'].includes(alert.severity)).length,
+    [alerts]
+  );
+
+  return (
+    <div className="dashboard-shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">COMPLIANCE OPERATIONS</p>
+          <h1>AML Analyst Dashboard</h1>
+        </div>
+        <div className="topbar-actions">
+          <div className={`status-badge ${health.status === 'ok' ? 'online' : ''}`}>
+            {health.status === 'ok' ? 'API Online' : 'Demo Mode'}
+          </div>
+          <button className="primary-button">+ New alert</button>
+        </div>
+      </header>
+
+      <section className="stats-grid">
+        <div className="stat-card accent-blue">
+          <span>Total transactions</span>
+          <strong>{summary.total_transactions}</strong>
+        </div>
+        <div className="stat-card accent-orange">
+          <span>Alerts</span>
+          <strong>{summary.alerts_count}</strong>
+        </div>
+        <div className="stat-card accent-red">
+          <span>High-risk</span>
+          <strong>{highRiskCount}</strong>
+        </div>
+        <div className="stat-card accent-green">
+          <span>Average score</span>
+          <strong>{summary.average_score}</strong>
+        </div>
+      </section>
+
+      <section className="content-grid">
+        <div className="panel panel-lg">
+          <div className="panel-header">
+            <h2>Active alerts</h2>
+            <button className="secondary-button">Escalate all</button>
+          </div>
+
+          <div className="alert-list">
+            {alerts.map((alert) => (
+              <article key={alert.alert_id} className="alert-item">
+                <div className="alert-head">
+                  <span className={`severity ${alert.severity}`}>{alert.severity}</span>
+                  <strong>{alert.alert_id}</strong>
+                </div>
+
+                <div className="alert-meta">
+                  <span>Account: {alert.account_id}</span>
+                  <span>Txn: {alert.transaction_id}</span>
+                </div>
+
+                <div className="alert-meta compact">
+                  <span>{alert.country}</span>
+                  <span>{alert.channel}</span>
+                  <span>{alert.amount}</span>
+                </div>
+
+                <p className="score-line">Score: {alert.score}</p>
+                <ul>
+                  {alert.reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+        </div>
+
+        <aside className="panel panel-side">
+          <div className="panel-header sticky-header">
+            <h2>Investigation queue</h2>
+            <button className="secondary-button">New case</button>
+          </div>
+
+          <div className="filter-row">
+            {['All', 'Open', 'Pending', 'Review'].map((filter) => (
+              <button
+                key={filter}
+                className={activeFilter === filter ? 'filter-button active' : 'filter-button'}
+                onClick={() => setActiveFilter(filter)}
+              >
+                {filter}
+              </button>
+            ))}
+          </div>
+
+          <div className="case-list">
+            {filteredCases.map((caseItem) => (
+              <button
+                key={caseItem.case_id}
+                className={selectedCase?.case_id === caseItem.case_id ? 'case-card selected' : 'case-card'}
+                onClick={() => setSelectedCase(caseItem)}
+              >
+                <div className="case-row">
+                  <strong>{caseItem.case_id}</strong>
+                  <span className={`case-status ${caseItem.status}`}>{caseItem.status}</span>
+                </div>
+                <p>Account: {caseItem.account_id}</p>
+                <p>Analyst: {caseItem.analyst}</p>
+                <div className="case-footer">
+                  <span className="priority-pill">{caseItem.priority}</span>
+                  <span>{caseItem.age}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </aside>
+      </section>
+
+      <section className="panel detail-panel">
+        <div className="panel-header detail-header">
+          <div>
+            <p className="eyebrow subtle">CASE DETAIL</p>
+            <h2>{selectedCase?.case_id}</h2>
+          </div>
+          <div className="detail-actions">
+            <button className="secondary-button">Escalate</button>
+            <button className="primary-button">Close case</button>
+          </div>
+        </div>
+
+        <div className="detail-grid">
+          <div>
+            <div className="detail-row">
+              <span>Status</span>
+              <strong>{selectedCase?.status}</strong>
+            </div>
+            <div className="detail-row">
+              <span>Account</span>
+              <strong>{selectedCase?.account_id}</strong>
+            </div>
+            <div className="detail-row">
+              <span>Analyst</span>
+              <strong>{selectedCase?.analyst}</strong>
+            </div>
+          </div>
+
+          <div className="summary-box">
+            <h3>Investigation summary</h3>
+            <p>{selectedCase?.summary}</p>
+          </div>
+        </div>
+
+        <div className="notes-box">
+          <h3>Case notes</h3>
+          <ul>
+            {notes.map((note) => (
+              <li key={note.id}>
+                <strong>{note.author}</strong> — {note.note}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section className="panel full-width">
+        <div className="panel-header">
+          <h2>High-risk account watchlist</h2>
+        </div>
+        <div className="watchlist">
+          {summary.top_risk_accounts.map((account) => (
+            <div key={account} className="watchlist-item">
+              <span>{account}</span>
+              <span className="dot" />
+              <span>Priority review</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
 }
 
-* {
-  box-sizing: border-box;
-}
-
-html, body, #root {
-  margin: 0;
-  min-height: 100%;
-  min-height: 100vh;
-  background: linear-gradient(180deg, #08111f, #0d1b2d 35%, #07101c);
-}
-
-button {
-  border: none;
-  border-radius: 8px;
-  cursor: pointer;
-  font: inherit;
-}
-
-.dashboard-shell {
-  max-width: 1280px;
-  margin: 0 auto;
-  padding: 32px 20px 60px;
-}
-
-.topbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 16px;
-  margin-bottom: 28px;
-}
-
-.topbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.eyebrow {
-  margin: 0 0 6px;
-  color: #7fc5ff;
-  font-size: 0.72rem;
-  letter-spacing: 0.12em;
-}
-
-.eyebrow.subtle {
-  color: #8da9c5;
-}
-
-h1 {
-  margin: 0;
-  font-size: clamp(2rem, 3vw, 3rem);
-}
-
-h2, h3 {
-  margin: 0;
-}
-
-.primary-button,
-.secondary-button,
-.filter-button {
-  padding: 9px 14px;
-  transition: transform 0.15s ease, opacity 0.15s ease;
-}
-
-.primary-button:hover,
-.secondary-button:hover,
-.filter-button:hover,
-.case-card:hover {
-  transform: translateY(-1px);
-}
-
-.primary-button {
-  background: linear-gradient(135deg, #70b8ff, #4d8dff);
-  color: #061018;
-  font-weight: 700;
-}
-
-.secondary-button {
-  background: #17314d;
-  color: #dfeefa;
-}
-
-.status-badge {
-  padding: 10px 16px;
-  border-radius: 999px;
-  background: #17314d;
-  color: #bdd8f4;
-  border: 1px solid rgba(143, 193, 255, 0.34);
-  font-weight: 600;
-}
-
-.status-badge.online {
-  background: rgba(23, 156, 97, 0.12);
-  color: #80f2ba;
-  border-color: rgba(128, 242, 186, 0.5);
-}
-
-.stats-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 18px;
-  margin-bottom: 28px;
-}
-
-.stat-card {
-  padding: 20px 18px;
-  border-radius: 16px;
-  background: rgba(10, 25, 40, 0.8);
-  border: 1px solid rgba(148, 184, 219, 0.14);
-  box-shadow: 0 14px 35px rgba(0, 0, 0, 0.16);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.stat-card span {
-  color: #a6c2db;
-  font-size: 0.9rem;
-}
-
-.stat-card strong {
-  font-size: clamp(1.8rem, 2vw, 2.7rem);
-}
-
-.accent-blue { border-top: 3px solid #5aa9ff; }
-.accent-orange { border-top: 3px solid #ffb454; }
-.accent-red { border-top: 3px solid #ff6b6b; }
-.accent-green { border-top: 3px solid #44d39f; }
-
-.content-grid {
-  display: grid;
-  grid-template-columns: 1.3fr 1fr;
-  gap: 20px;
-}
-
-.panel {
-  background: rgba(9, 19, 30, 0.8);
-  border: 1px solid rgba(139, 176, 214, 0.15);
-  border-radius: 18px;
-  padding: 18px;
-}
-
-.panel-lg {
-  min-height: 420px;
-}
-
-.panel-side {
-  min-height: 420px;
-}
-
-.full-width {
-  margin-top: 20px;
-}
-
-.detail-panel {
-  margin-top: 20px;
-}
-
-.panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 16px;
-}
-
-.sticky-header {
-  align-items: flex-start;
-}
-
-.panel-header h2 {
-  font-size: 1.2rem;
-}
-
-.alert-list, .case-list {
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
-}
-
-.alert-item, .case-card {
-  background: rgba(15, 31, 48, 0.9);
-  border: 1px solid rgba(149, 187, 220, 0.12);
-  border-radius: 12px;
-  padding: 14px;
-  text-align: left;
-}
-
-.alert-head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  margin-bottom: 8px;
-}
-
-.alert-meta {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  color: #d7e8f9;
-  font-size: 0.85rem;
-  margin: 10px 0;
-}
-
-.alert-meta.compact {
-  color: #a7bfd8;
-}
-
-.score-line {
-  margin: 0 0 8px;
-  color: #d7f5ff;
-  font-weight: 600;
-}
-
-.alert-item ul {
-  margin: 10px 0 0;
-  padding-left: 18px;
-  color: #afcce6;
-}
-
-.severity {
-  display: inline-block;
-  padding: 5px 8px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-}
-
-.severity.low { background: rgba(81, 151, 255, 0.12); color: #8cc2ff; }
-.severity.medium { background: rgba(255, 196, 92, 0.12); color: #ffc75f; }
-.severity.high { background: rgba(255, 128, 96, 0.12); color: #ff9b7d; }
-.severity.critical { background: rgba(255, 92, 92, 0.12); color: #ff7c7c; }
-
-.filter-row {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 16px;
-  flex-wrap: wrap;
-}
-
-.filter-button {
-  background: rgba(20, 36, 52, 0.9);
-  color: #dcecfb;
-  border: 1px solid rgba(144, 173, 201, 0.2);
-}
-
-.filter-button.active {
-  background: #1b3a5d;
-  border-color: rgba(126, 188, 255, 0.5);
-  color: #eaf5ff;
-}
-
-.case-card {
-  width: 100%;
-  display: block;
-  color: inherit;
-  background: rgba(15, 31, 48, 0.9);
-}
-
-.case-card.selected {
-  border-color: rgba(126, 188, 255, 0.8);
-  box-shadow: 0 0 0 1px rgba(126, 188, 255, 0.35);
-}
-
-.case-row {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 8px;
-}
-
-.case-list .case-card p {
-  margin: 6px 0;
-  color: #d8e6f7;
-}
-
-.case-status {
-  display: inline-block;
-  padding: 5px 8px;
-  border-radius: 999px;
-  font-size: 0.72rem;
-  font-weight: 700;
-  text-transform: uppercase;
-}
-
-.case-status.open { background: rgba(73, 166, 255, 0.14); color: #8ac3ff; }
-.case-status.pending { background: rgba(255, 189, 89, 0.14); color: #ffc763; }
-.case-status.review { background: rgba(159, 132, 255, 0.14); color: #cbc1ff; }
-
-.case-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-top: 12px;
-  color: #a7c2db;
-  font-size: 0.82rem;
-}
-
-.priority-pill {
-  display: inline-flex;
-  padding: 4px 8px;
-  border-radius: 999px;
-  background: rgba(255, 120, 120, 0.12);
-  color: #ff9a9a;
-  border: 1px solid rgba(255, 138, 138, 0.2);
-}
-
-.detail-header {
-  margin-bottom: 18px;
-}
-
-.detail-actions {
-  display: flex;
-  gap: 10px;
-}
-
-.detail-grid {
-  display: grid;
-  grid-template-columns: 1fr 1.4fr;
-  gap: 18px;
-}
-
-.detail-row {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 10px 0;
-  border-bottom: 1px solid rgba(147, 178, 215, 0.12);
-  color: #cfe1f3;
-}
-
-.summary-box {
-  padding: 18px;
-  border-radius: 12px;
-  background: rgba(15, 31, 48, 0.9);
-  border: 1px solid rgba(149, 187, 220, 0.12);
-}
-
-.summary-box h3 {
-  margin-bottom: 10px;
-}
-
-.summary-box p {
-  margin: 0;
-  color: #d0e1f5;
-}
-
-.watchlist {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.watchlist-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  padding: 14px 16px;
-  border-radius: 12px;
-  background: rgba(15, 31, 48, 0.85);
-  border: 1px solid rgba(149, 187, 220, 0.12);
-}
-
-.dot {
-  width: 10px;
-  height: 10px;
-  border-radius: 50%;
-  background: #ff7373;
-  box-shadow: 0 0 12px rgba(255, 115, 115, 0.65);
-}
-
-@media (max-width: 860px) {
-  .stats-grid,
-  .content-grid,
-  .detail-grid,
-  .watchlist {
-    grid-template-columns: 1fr;
-  }
-
-  .topbar,
-  .panel-header,
-  .detail-header,
-  .detail-actions,
-  .topbar-actions {
-    flex-direction: column;
-    align-items: flex-start;
-  }
-}
+export default App;
