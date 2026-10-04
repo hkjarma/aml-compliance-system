@@ -1,86 +1,59 @@
 from __future__ import annotations
 
-from sqlalchemy import JSON, Boolean, Column, DateTime, Float, Integer, String, Text
-from sqlalchemy.sql import func
+import os
+from typing import Dict, List
 
-from app.database import Base
+from fastapi import Depends, Header, HTTPException, status
 
-
-class TransactionModel(Base):
-    __tablename__ = "transactions"
-
-    id = Column(String, primary_key=True, index=True)
-    account_id = Column(String, index=True, nullable=False)
-    amount = Column(Float, nullable=False)
-    currency = Column(String, nullable=False, default="USD")
-    direction = Column(String, nullable=False)
-    counterparty = Column(String, nullable=False)
-    country = Column(String, nullable=False)
-    timestamp = Column(String, nullable=False)
-    channel = Column(String, nullable=False)
-    risk_tags = Column(JSON, nullable=True, default=list)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+API_KEYS: Dict[str, str] = {
+    os.getenv("AML_ANALYST_KEY", "analyst-demo-key"): "analyst",
+    os.getenv("AML_MANAGER_KEY", "manager-demo-key"): "manager",
+    os.getenv("AML_ADMIN_KEY", "admin-demo-key"): "admin",
+}
 
 
-class AlertModel(Base):
-    __tablename__ = "alerts"
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    alert_id = Column(String, unique=True, nullable=False, index=True)
-    account_id = Column(String, index=True, nullable=False)
-    transaction_id = Column(String, index=True, nullable=False)
-    score = Column(Float, nullable=False)
-    severity = Column(String, nullable=False)
-    reasons = Column(JSON, nullable=False, default=list)
-    status = Column(String, nullable=False, default="open")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+def get_permissions(role: str) -> List[str]:
+    permissions = {
+        "analyst": ["read:alerts", "read:cases", "read:customer_kyc", "read:sanctions"],
+        "manager": ["read:alerts", "read:cases", "write:cases", "read:customer_kyc", "read:sanctions"],
+        "admin": ["read:alerts", "read:cases", "write:cases", "read:customer_kyc", "read:sanctions", "write:controls"],
+    }
+    return permissions.get(role, [])
 
 
-class CaseModel(Base):
-    __tablename__ = "cases"
+def get_api_key(
+    x_api_key: str | None = Header(default=None, alias="X-API-Key"),
+    authorization: str | None = Header(default=None, alias="Authorization"),
+) -> str:
+    candidate = x_api_key
+    if not candidate and authorization and authorization.lower().startswith("bearer "):
+        candidate = authorization.split(" ", 1)[1].strip()
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    case_id = Column(String, unique=True, nullable=False, index=True)
-    account_id = Column(String, index=True, nullable=False)
-    status = Column(String, nullable=False, default="open")
-    analyst = Column(String, nullable=True)
-    summary = Column(Text, nullable=False)
-    priority = Column(String, nullable=False, default="medium")
-    age = Column(String, nullable=False, default="0m")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    if not candidate:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Missing API key")
 
+    if candidate not in API_KEYS:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
-class CaseNoteModel(Base):
-    __tablename__ = "case_notes"
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    case_id = Column(String, index=True, nullable=False)
-    note = Column(Text, nullable=False)
-    author = Column(String, nullable=False, default="system")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    return candidate
 
 
-class SanctionEntityModel(Base):
-    __tablename__ = "sanction_entities"
-
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    name = Column(String, nullable=False, index=True)
-    aliases = Column(JSON, nullable=True, default=list)
-    country = Column(String, nullable=True)
-    category = Column(String, nullable=False, default="entity")
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+def get_current_user(api_key: str = Depends(get_api_key)) -> Dict[str, str | List[str]]:
+    role = API_KEYS[api_key]
+    return {"user": role, "role": role, "permissions": get_permissions(role)}
 
 
-class CustomerKycModel(Base):
-    __tablename__ = "customer_kyc"
+def require_roles(*roles: str):
+    def dependency(user: Dict[str, str | List[str]] = Depends(get_current_user)) -> Dict[str, str | List[str]]:
+        user_role = str(user.get("role", ""))
+        if roles and user_role not in roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Role required: {', '.join(roles)}",
+            )
+        return user
 
-    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
-    account_id = Column(String, unique=True, index=True, nullable=False)
-    customer_name = Column(String, nullable=False)
-    status = Column(String, nullable=False, default="review_pending")
-    risk_rating = Column(String, nullable=False, default="medium")
-    country = Column(String, nullable=True)
-    pep = Column(Boolean, nullable=False, default=False)
-    beneficial_owners = Column(JSON, nullable=True, default=list)
-    last_reviewed = Column(String, nullable=True)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    return dependency
+
+
+__all__ = ["API_KEYS", "get_api_key", "get_current_user", "require_roles"]

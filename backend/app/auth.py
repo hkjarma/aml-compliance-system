@@ -147,11 +147,11 @@ def health_check() -> Dict[str, str]:
 
 
 @app.get("/api/v1/auth/me", response_model=AuthUserResponse)
-def get_me(user: Dict[str, str | List[str]] = Depends(get_current_user)) -> AuthUserResponse:
+def get_me(user: Dict[str, str] = Depends(get_current_user)) -> AuthUserResponse:
     return AuthUserResponse(
-        user=str(user["user"]),
-        role=str(user["role"]),
-        permissions=[str(item) for item in user["permissions"]],
+        user=user["user"],
+        role=user["role"],
+        permissions=user["permissions"],
     )
 
 
@@ -173,7 +173,7 @@ def login(payload: AuthLoginRequest) -> AuthUserResponse:
 @app.get("/api/v1/risk/summary", response_model=RiskSummary)
 def risk_summary(
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("analyst", "manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("analyst", "manager", "admin")),
 ) -> RiskSummary:
     alerts = list_alerts(db)
     summary = engine.summarize_alerts([alert.model_dump() for alert in alerts])
@@ -190,7 +190,7 @@ def risk_summary(
 @app.get("/api/v1/alerts", response_model=List[Alert])
 def list_alerts(
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("analyst", "manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("analyst", "manager", "admin")),
 ) -> List[Alert]:
     results = db.query(AlertModel).all()
     return [
@@ -210,7 +210,7 @@ def list_alerts(
 @app.get("/api/v1/cases", response_model=List[CaseRecord])
 def list_cases(
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("analyst", "manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("analyst", "manager", "admin")),
 ) -> List[CaseRecord]:
     results = db.query(CaseModel).all()
     return [
@@ -232,7 +232,7 @@ def list_cases(
 def get_case_notes(
     case_id: str,
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("analyst", "manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("analyst", "manager", "admin")),
 ) -> List[CaseNote]:
     notes = (
         db.query(CaseNoteModel)
@@ -257,7 +257,7 @@ def add_case_note(
     case_id: str,
     payload: CaseNoteCreate,
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("analyst", "manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("analyst", "manager", "admin")),
 ) -> CaseNote:
     case = db.query(CaseModel).filter(CaseModel.case_id == case_id).first()
     if case is None:
@@ -282,7 +282,7 @@ def update_case(
     case_id: str,
     payload: CaseStatusUpdate,
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("manager", "admin")),
 ) -> CaseRecord:
     case = db.query(CaseModel).filter(CaseModel.case_id == case_id).first()
     if case is None:
@@ -317,7 +317,7 @@ def update_case(
 @app.get("/api/v1/sanctions/watchlist", response_model=List[SanctionEntity])
 def list_sanctions(
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("analyst", "manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("analyst", "manager", "admin")),
 ) -> List[SanctionEntity]:
     entities = db.query(SanctionEntityModel).all()
     return [
@@ -336,7 +336,7 @@ def list_sanctions(
 def check_sanctions(
     payload: SanctionCheckRequest,
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("analyst", "manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("analyst", "manager", "admin")),
 ) -> SanctionCheckResult:
     query_name = (payload.counterparty or "").strip().lower()
     query_country = (payload.country or "").strip().upper()
@@ -375,7 +375,7 @@ def check_sanctions(
 def get_customer_kyc(
     account_id: str,
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("analyst", "manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("analyst", "manager", "admin")),
 ) -> CustomerKyc:
     profile = db.query(CustomerKycModel).filter(CustomerKycModel.account_id == account_id).first()
     if profile is None:
@@ -397,7 +397,7 @@ def get_customer_kyc(
 def analyze_transaction(
     payload: Transaction,
     db: Session = Depends(get_db),
-    _user: Dict[str, str | List[str]] = Depends(require_roles("analyst", "manager", "admin")),
+    _user: Dict[str, str] = Depends(require_roles("analyst", "manager", "admin")),
 ) -> Alert:
     result = engine.evaluate_transaction(payload.model_dump())
     alert_id = f"alert-{payload.id}"
@@ -659,6 +659,7 @@ if __name__ == "__main__":
 Legacy static data access kept for a minimal compatibility path.
 """
 
+
 # no-op: the app now persists data through SQLAlchemy-backed models.
 
 
@@ -666,665 +667,262 @@ Legacy static data access kept for a minimal compatibility path.
 """
 
 
-"""
-"""
-
-
-"""
-"""
-
-"""
-"""
-
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-          
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
 """""""
-"""""""
-"""""""
-"""""""
-"""""""
-"""""""
-""""
-"""
+
 
 """
 """
 
-"""
-"""
+
+""""""
+
 
 """
 """
 
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
 
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
-""""
-"""
 
-"""
-"""
-"""
 
 """
 """
 
-"""
-"""
 
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
+
+
+"""
+"""
+
+
 """""""
-"""""""
-"""""""
-"""""""
-"""""""
-""""""""
+
 
 """
 """
 
 """
 """
-
-"""
-"""
-
-"""
+                
 """
 
 """
 """
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-
-"""
-"""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
-""""
 
 """
 """

@@ -1,575 +1,404 @@
-from __future__ import annotations
-
-from typing import Any, Dict, List
-
-from fastapi import Depends, FastAPI, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from sqlalchemy.orm import Session
-
-from app.aml_engine import AMLRiskEngine
-from app.database import get_db, init_db
-from app.models import (
-    AlertModel,
-    CaseModel,
-    CaseNoteModel,
-    CustomerKycModel,
-    SanctionEntityModel,
-    TransactionModel,
-)
-
-app = FastAPI(title="AML Compliance API", version="0.2.0")
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-engine = AMLRiskEngine()
-
-
-@app.on_event("startup")
-def startup_event() -> None:
-    init_db()
-    seed_default_data()
-
-
-class Transaction(BaseModel):
-    id: str
-    account_id: str
-    amount: float = Field(..., gt=0)
-    currency: str = "USD"
-    direction: str
-    counterparty: str
-    country: str
-    timestamp: str
-    channel: str
-    risk_tags: List[str] = []
-
-
-class Alert(BaseModel):
-    alert_id: str
-    account_id: str
-    transaction_id: str
-    score: float
-    severity: str
-    reasons: List[str]
-    status: str = "open"
-
-
-class CaseRecord(BaseModel):
-    case_id: str
-    account_id: str
-    status: str = "open"
-    alert_ids: List[str] = []
-    analyst: str | None = None
-    summary: str
-    priority: str = "medium"
-    age: str = "0m"
-
-
-class CaseNote(BaseModel):
-    id: int
-    case_id: str
-    note: str
-    author: str
-    created_at: str
-
-
-class CaseNoteCreate(BaseModel):
-    note: str
-    author: str = "analyst"
-
-
-class CaseStatusUpdate(BaseModel):
-    status: str | None = None
-    analyst: str | None = None
-    summary: str | None = None
-    priority: str | None = None
-    age: str | None = None
-
-
-class SanctionEntity(BaseModel):
-    id: int
-    name: str
-    aliases: List[str]
-    country: str | None
-    category: str
-
-
-class SanctionCheckRequest(BaseModel):
-    counterparty: str
-    country: str | None = None
-
-
-class SanctionCheckResult(BaseModel):
-    screening_status: str
-    risk_level: str
-    matches: List[SanctionEntity]
-
-
-class CustomerKyc(BaseModel):
-    account_id: str
-    customer_name: str
-    status: str
-    risk_rating: str
-    country: str | None
-    pep: bool
-    beneficial_owners: List[str]
-    last_reviewed: str | None
-
-
-class RiskSummary(BaseModel):
-    total_transactions: int
-    alerts_count: int
-    high_risk_count: int
-    average_score: float
-    top_risk_accounts: List[str]
-
-
-@app.get("/health")
-def health_check() -> Dict[str, str]:
-    return {"status": "ok", "service": "aml-compliance-api"}
-
-
-@app.get("/api/v1/risk/summary", response_model=RiskSummary)
-def risk_summary(db: Session = Depends(get_db)) -> RiskSummary:
-    alerts = list_alerts(db)
-    summary = engine.summarize_alerts([alert.model_dump() for alert in alerts])
-    transactions = db.query(TransactionModel).all()
-    return RiskSummary(
-        total_transactions=len(transactions),
-        alerts_count=summary["alerts_count"],
-        high_risk_count=summary["high_risk_count"],
-        average_score=summary["average_score"],
-        top_risk_accounts=summary["top_risk_accounts"],
-    )
-
-
-@app.get("/api/v1/alerts", response_model=List[Alert])
-def list_alerts(db: Session = Depends(get_db)) -> List[Alert]:
-    results = db.query(AlertModel).all()
-    return [
-        Alert(
-            alert_id=item.alert_id,
-            account_id=item.account_id,
-            transaction_id=item.transaction_id,
-            score=item.score,
-            severity=item.severity,
-            reasons=item.reasons,
-            status=item.status,
-        )
-        for item in results
-    ]
-
-
-@app.get("/api/v1/cases", response_model=List[CaseRecord])
-def list_cases(db: Session = Depends(get_db)) -> List[CaseRecord]:
-    results = db.query(CaseModel).all()
-    return [
-        CaseRecord(
-            case_id=item.case_id,
-            account_id=item.account_id,
-            status=item.status,
-            alert_ids=[],
-            analyst=item.analyst,
-            summary=item.summary,
-            priority=item.priority,
-            age=item.age,
-        )
-        for item in results
-    ]
-
-
-@app.get("/api/v1/cases/{case_id}/notes", response_model=List[CaseNote])
-def get_case_notes(case_id: str, db: Session = Depends(get_db)) -> List[CaseNote]:
-    notes = (
-        db.query(CaseNoteModel)
-        .filter(CaseNoteModel.case_id == case_id)
-        .order_by(CaseNoteModel.created_at.asc())
-        .all()
-    )
-    return [
-        CaseNote(
-            id=item.id,
-            case_id=item.case_id,
-            note=item.note,
-            author=item.author,
-            created_at=item.created_at.isoformat() if item.created_at else "",
-        )
-        for item in notes
-    ]
-
-
-@app.post("/api/v1/cases/{case_id}/notes", response_model=CaseNote)
-def add_case_note(case_id: str, payload: CaseNoteCreate, db: Session = Depends(get_db)) -> CaseNote:
-    case = db.query(CaseModel).filter(CaseModel.case_id == case_id).first()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    note = CaseNoteModel(case_id=case_id, note=payload.note, author=payload.author)
-    db.add(note)
-    db.commit()
-    db.refresh(note)
-
-    return CaseNote(
-        id=note.id,
-        case_id=note.case_id,
-        note=note.note,
-        author=note.author,
-        created_at=note.created_at.isoformat() if note.created_at else "",
-    )
-
-
-@app.patch("/api/v1/cases/{case_id}", response_model=CaseRecord)
-def update_case(case_id: str, payload: CaseStatusUpdate, db: Session = Depends(get_db)) -> CaseRecord:
-    case = db.query(CaseModel).filter(CaseModel.case_id == case_id).first()
-    if case is None:
-        raise HTTPException(status_code=404, detail="Case not found")
-
-    if payload.status is not None:
-        case.status = payload.status
-    if payload.analyst is not None:
-        case.analyst = payload.analyst
-    if payload.summary is not None:
-        case.summary = payload.summary
-    if payload.priority is not None:
-        case.priority = payload.priority
-    if payload.age is not None:
-        case.age = payload.age
-
-    db.commit()
-    db.refresh(case)
-
-    return CaseRecord(
-        case_id=case.case_id,
-        account_id=case.account_id,
-        status=case.status,
-        alert_ids=[],
-        analyst=case.analyst,
-        summary=case.summary,
-        priority=case.priority,
-        age=case.age,
-    )
-
-
-@app.get("/api/v1/sanctions/watchlist", response_model=List[SanctionEntity])
-def list_sanctions(db: Session = Depends(get_db)) -> List[SanctionEntity]:
-    entities = db.query(SanctionEntityModel).all()
-    return [
-        SanctionEntity(
-            id=item.id,
-            name=item.name,
-            aliases=item.aliases or [],
-            country=item.country,
-            category=item.category,
-        )
-        for item in entities
-    ]
-
-
-@app.post("/api/v1/sanctions/check", response_model=SanctionCheckResult)
-def check_sanctions(payload: SanctionCheckRequest, db: Session = Depends(get_db)) -> SanctionCheckResult:
-    query_name = (payload.counterparty or "").strip().lower()
-    query_country = (payload.country or "").strip().upper()
-    matches: List[SanctionEntity] = []
-
-    for entity in db.query(SanctionEntityModel).all():
-        candidate_names = {entity.name.lower(), *(name.lower() for name in (entity.aliases or []))}
-        same_country = bool(query_country) and entity.country and entity.country.upper() == query_country
-        if query_name and (query_name in candidate_names or any(query_name in name for name in candidate_names)):
-            matches.append(
-                SanctionEntity(
-                    id=entity.id,
-                    name=entity.name,
-                    aliases=entity.aliases or [],
-                    country=entity.country,
-                    category=entity.category,
-                )
-            )
-        elif same_country:
-            matches.append(
-                SanctionEntity(
-                    id=entity.id,
-                    name=entity.name,
-                    aliases=entity.aliases or [],
-                    country=entity.country,
-                    category=entity.category,
-                )
-            )
-
-    if matches:
-        return SanctionCheckResult(screening_status="blocked", risk_level="high", matches=matches)
-    return SanctionCheckResult(screening_status="clear", risk_level="low", matches=[])
-
-
-@app.get("/api/v1/customers/{account_id}/kyc", response_model=CustomerKyc)
-def get_customer_kyc(account_id: str, db: Session = Depends(get_db)) -> CustomerKyc:
-    profile = db.query(CustomerKycModel).filter(CustomerKycModel.account_id == account_id).first()
-    if profile is None:
-        raise HTTPException(status_code=404, detail="KYC profile not found")
-
-    return CustomerKyc(
-        account_id=profile.account_id,
-        customer_name=profile.customer_name,
-        status=profile.status,
-        risk_rating=profile.risk_rating,
-        country=profile.country,
-        pep=profile.pep,
-        beneficial_owners=profile.beneficial_owners or [],
-        last_reviewed=profile.last_reviewed,
-    )
-
-
-@app.post("/api/v1/transactions/analyze", response_model=Alert)
-def analyze_transaction(payload: Transaction, db: Session = Depends(get_db)) -> Alert:
-    result = engine.evaluate_transaction(payload.model_dump())
-    alert_id = f"alert-{payload.id}"
-
-    existing = db.query(AlertModel).filter_by(alert_id=alert_id).first()
-    if existing is None:
-        db.add(
-            AlertModel(
-                alert_id=alert_id,
-                account_id=payload.account_id,
-                transaction_id=payload.id,
-                score=result["score"],
-                severity=result["severity"],
-                reasons=result["reasons"],
-                status="open",
-            )
-        )
-        db.commit()
-
-    return Alert(
-        alert_id=alert_id,
-        account_id=payload.account_id,
-        transaction_id=payload.id,
-        score=result["score"],
-        severity=result["severity"],
-        reasons=result["reasons"],
-        status="open",
-    )
-
-
-def seed_default_data() -> None:
-    from app.database import SessionLocal
-
-    db = SessionLocal()
-    try:
-        if db.query(TransactionModel).count() == 0:
-            for tx in [
-                {
-                    "id": "txn-1001",
-                    "account_id": "acct-01",
-                    "amount": 22000,
-                    "currency": "USD",
-                    "direction": "outbound",
-                    "counterparty": "Apex Logistics",
-                    "country": "US",
-                    "timestamp": "2026-10-04T09:15:00Z",
-                    "channel": "wire",
-                    "risk_tags": ["rapid_sequence"],
-                },
-                {
-                    "id": "txn-1002",
-                    "account_id": "acct-02",
-                    "amount": 14000,
-                    "currency": "USD",
-                    "direction": "inbound",
-                    "counterparty": "Blue Harbor",
-                    "country": "RU",
-                    "timestamp": "2026-10-04T10:30:00Z",
-                    "channel": "cash",
-                    "risk_tags": ["structuring"],
-                },
-                {
-                    "id": "txn-1003",
-                    "account_id": "acct-01",
-                    "amount": 9000,
-                    "currency": "USD",
-                    "direction": "outbound",
-                    "counterparty": "Northline Export",
-                    "country": "US",
-                    "timestamp": "2026-10-04T12:00:00Z",
-                    "channel": "wire",
-                    "risk_tags": [],
-                },
-                {
-                    "id": "txn-1004",
-                    "account_id": "acct-03",
-                    "amount": 32000,
-                    "currency": "USD",
-                    "direction": "outbound",
-                    "counterparty": "Flux Trading",
-                    "country": "CN",
-                    "timestamp": "2026-10-04T13:40:00Z",
-                    "channel": "crypto",
-                    "risk_tags": ["round_trip"],
-                },
-            ]:
-                db.add(
-                    TransactionModel(
-                        id=tx["id"],
-                        account_id=tx["account_id"],
-                        amount=tx["amount"],
-                        currency=tx["currency"],
-                        direction=tx["direction"],
-                        counterparty=tx["counterparty"],
-                        country=tx["country"],
-                        timestamp=tx["timestamp"],
-                        channel=tx["channel"],
-                        risk_tags=tx.get("risk_tags", []),
-                    )
-                )
-
-        if db.query(CaseModel).count() == 0:
-            db.add_all(
-                [
-                    CaseModel(
-                        case_id="case-001",
-                        account_id="acct-01",
-                        status="open",
-                        analyst="N. Patel",
-                        summary="Large outbound series with rapid movement and potential structuring.",
-                        priority="high",
-                        age="1h 20m",
-                    ),
-                    CaseModel(
-                        case_id="case-002",
-                        account_id="acct-02",
-                        status="pending",
-                        analyst="M. Gomez",
-                        summary="Cash-intensive inbound payment with a high-risk jurisdiction.",
-                        priority="critical",
-                        age="3h 05m",
-                    ),
-                ]
-            )
-
-        if db.query(AlertModel).count() == 0:
-            default_alerts = [
-                {
-                    "alert_id": "alert-txn-1001",
-                    "account_id": "acct-01",
-                    "transaction_id": "txn-1001",
-                    "score": 92.0,
-                    "severity": "critical",
-                    "reasons": ["Large outbound transfer", "High-risk settlement patterns"],
-                    "status": "open",
-                },
-                {
-                    "alert_id": "alert-txn-1002",
-                    "account_id": "acct-02",
-                    "transaction_id": "txn-1002",
-                    "score": 76.0,
-                    "severity": "high",
-                    "reasons": ["Cash channel", "High-risk jurisdiction: RU"],
-                    "status": "open",
-                },
-                {
-                    "alert_id": "alert-txn-1004",
-                    "account_id": "acct-03",
-                    "transaction_id": "txn-1004",
-                    "score": 81.0,
-                    "severity": "high",
-                    "reasons": ["Crypto channel", "Round-trip funds movement suspected"],
-                    "status": "open",
-                },
-            ]
-            db.add_all(
-                [
-                    AlertModel(
-                        alert_id=item["alert_id"],
-                        account_id=item["account_id"],
-                        transaction_id=item["transaction_id"],
-                        score=item["score"],
-                        severity=item["severity"],
-                        reasons=item["reasons"],
-                        status=item["status"],
-                    )
-                    for item in default_alerts
-                ]
-            )
-
-        if db.query(CaseNoteModel).count() == 0:
-            db.add_all(
-                [
-                    CaseNoteModel(
-                        case_id="case-001",
-                        note="Analyst reviewed the account activity and flagged unusual outbound movement.",
-                        author="N. Patel",
-                    ),
-                    CaseNoteModel(
-                        case_id="case-002",
-                        note="Cross-border transaction review requested due to high-risk jurisdiction exposure.",
-                        author="M. Gomez",
-                    ),
-                ]
-            )
-
-        if db.query(SanctionEntityModel).count() == 0:
-            db.add_all(
-                [
-                    SanctionEntityModel(
-                        name="Blue Harbor",
-                        aliases=["Blue Harbor Imports", "Blue Harbor Logistics"],
-                        country="RU",
-                        category="entity",
-                    ),
-                    SanctionEntityModel(
-                        name="Flux Trading",
-                        aliases=["Flux Holdings", "Flux Capital"],
-                        country="CN",
-                        category="entity",
-                    ),
-                    SanctionEntityModel(
-                        name="Gulf Bell Ventures",
-                        aliases=["Gulf Bell", "Bell Ventures"],
-                        country="IR",
-                        category="entity",
-                    ),
-                ]
-            )
-
-        if db.query(CustomerKycModel).count() == 0:
-            db.add_all(
-                [
-                    CustomerKycModel(
-                        account_id="acct-01",
-                        customer_name="Apex Logistics",
-                        status="review_pending",
-                        risk_rating="high",
-                        country="US",
-                        pep=False,
-                        beneficial_owners=["N. Patel"],
-                        last_reviewed="2026-09-12",
-                    ),
-                    CustomerKycModel(
-                        account_id="acct-02",
-                        customer_name="Blue Harbor",
-                        status="sanctions_review",
-                        risk_rating="critical",
-                        country="RU",
-                        pep=False,
-                        beneficial_owners=["M. Gomez"],
-                        last_reviewed="2026-10-01",
-                    ),
-                    CustomerKycModel(
-                        account_id="acct-03",
-                        customer_name="Flux Trading",
-                        status="enhanced_due_diligence",
-                        risk_rating="high",
-                        country="CN",
-                        pep=False,
-                        beneficial_owners=["H. Zhang"],
-                        last_reviewed="2026-09-20",
-                    ),
-                ]
-            )
-
-        db.commit()
-    finally:
-        db.close()
+import { useEffect, useMemo, useState } from 'react';
+
+const fallbackSummary = {
+  total_transactions: 4,
+  alerts_count: 3,
+  high_risk_count: 2,
+  average_score: 73.5,
+  top_risk_accounts: ['acct-01', 'acct-02', 'acct-03'],
+};
+
+const fallbackAlerts = [
+  {
+    alert_id: 'alert-txn-1001',
+    account_id: 'acct-01',
+    transaction_id: 'txn-1001',
+    score: 92,
+    severity: 'critical',
+    reasons: ['Large outbound transfer', 'High-risk settlement patterns'],
+    country: 'US',
+    amount: '$22,000',
+    channel: 'Wire',
+  },
+  {
+    alert_id: 'alert-txn-1002',
+    account_id: 'acct-02',
+    transaction_id: 'txn-1002',
+    score: 76,
+    severity: 'high',
+    reasons: ['Cash channel', 'High-risk jurisdiction: RU'],
+    country: 'RU',
+    amount: '$14,000',
+    channel: 'Cash',
+  },
+  {
+    alert_id: 'alert-txn-1004',
+    account_id: 'acct-03',
+    transaction_id: 'txn-1004',
+    score: 81,
+    severity: 'high',
+    reasons: ['Crypto channel', 'Round-trip funds movement suspected'],
+    country: 'CN',
+    amount: '$32,000',
+    channel: 'Crypto',
+  },
+];
+
+const fallbackCases = [
+  {
+    case_id: 'case-001',
+    account_id: 'acct-01',
+    status: 'open',
+    analyst: 'N. Patel',
+    summary: 'Large outbound transfer with unusual payment behavior.',
+    priority: 'High',
+    age: '1h 20m',
+  },
+  {
+    case_id: 'case-002',
+    account_id: 'acct-02',
+    status: 'pending',
+    analyst: 'M. Gomez',
+    summary: 'Cash-intensive inbound transaction tied to high-risk jurisdiction.',
+    priority: 'Critical',
+    age: '3h 05m',
+  },
+  {
+    case_id: 'case-003',
+    account_id: 'acct-07',
+    status: 'review',
+    analyst: 'S. Chen',
+    summary: 'Recurring round-trip pattern across multiple entities.',
+    priority: 'Medium',
+    age: '5h 41m',
+  },
+];
+
+const fallbackSanctions = [
+  { id: 1, name: 'Blue Harbor', country: 'RU', category: 'entity' },
+  { id: 2, name: 'Flux Trading', country: 'CN', category: 'entity' },
+  { id: 3, name: 'Gulf Bell Ventures', country: 'IR', category: 'entity' },
+];
+
+const API_KEYS = {
+  analyst: 'analyst-demo-key',
+  manager: 'manager-demo-key',
+  admin: 'admin-demo-key',
+};
+
+function App() {
+  const [summary, setSummary] = useState(fallbackSummary);
+  const [alerts, setAlerts] = useState(fallbackAlerts);
+  const [cases, setCases] = useState(fallbackCases);
+  const [sanctions, setSanctions] = useState(fallbackSanctions);
+  const [health, setHealth] = useState({ status: 'loading' });
+  const [selectedCase, setSelectedCase] = useState(fallbackCases[0]);
+  const [activeFilter, setActiveFilter] = useState('All');
+  const [notes, setNotes] = useState([
+    { id: 1, case_id: 'case-001', author: 'N. Patel', note: 'Analyst review indicates unusual outbound movement.' },
+    { id: 2, case_id: 'case-001', author: 'Compliance', note: 'Escalation recommended for investigative review.' },
+  ]);
+  const [authRole, setAuthRole] = useState('analyst');
+  const [apiKey, setApiKey] = useState(API_KEYS.analyst);
+
+  const authHeaders = useMemo(
+    () => ({
+      'X-API-Key': apiKey,
+      'Content-Type': 'application/json',
+    }),
+    [apiKey]
+  );
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const [healthRes, summaryRes, alertsRes, casesRes, sanctionsRes] = await Promise.all([
+          fetch('/health', { headers: authHeaders }),
+          fetch('/api/v1/risk/summary', { headers: authHeaders }),
+          fetch('/api/v1/alerts', { headers: authHeaders }),
+          fetch('/api/v1/cases', { headers: authHeaders }),
+          fetch('/api/v1/sanctions/watchlist', { headers: authHeaders }),
+        ]);
+
+        if (healthRes.ok) {
+          const healthData = await healthRes.json();
+          setHealth(healthData);
+        }
+
+        if (summaryRes.ok) {
+          setSummary(await summaryRes.json());
+        }
+
+        if (alertsRes.ok) {
+          setAlerts(await alertsRes.json());
+        }
+
+        if (casesRes.ok) {
+          const loadedCases = await casesRes.json();
+          setCases(loadedCases);
+          if (loadedCases.length) setSelectedCase(loadedCases[0]);
+        }
+
+        if (sanctionsRes.ok) {
+          setSanctions(await sanctionsRes.json());
+        }
+      } catch (error) {
+        console.warn('Using fallback AML dashboard data.', error);
+      }
+    };
+
+    loadData();
+  }, [authHeaders]);
+
+  useEffect(() => {
+    if (!selectedCase) return;
+    const loadNotes = async () => {
+      try {
+        const res = await fetch(`/api/v1/cases/${selectedCase.case_id}/notes`, { headers: authHeaders });
+        if (res.ok) {
+          const loadedNotes = await res.json();
+          setNotes(loadedNotes);
+        }
+      } catch (error) {
+        console.warn('Could not load case notes.', error);
+      }
+    };
+
+    loadNotes();
+  }, [selectedCase, authHeaders]);
+
+  const filteredCases = useMemo(() => {
+    if (activeFilter === 'All') return cases;
+    return cases.filter((item) => item.status === activeFilter.toLowerCase());
+  }, [cases, activeFilter]);
+
+  const highRiskCount = useMemo(
+    () => alerts.filter((alert) => ['high', 'critical'].includes(alert.severity)).length,
+    [alerts]
+  );
+
+  const handleRoleChange = (nextRole) => {
+    setAuthRole(nextRole);
+    setApiKey(API_KEYS[nextRole]);
+  };
+
+  return (
+    <div className="dashboard-shell">
+      <header className="topbar" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 16 }}>
+        <div>
+          <p className="eyebrow">COMPLIANCE OPERATIONS</p>
+          <h1>AML Analyst Dashboard</h1>
+        </div>
+        <div className="topbar-actions" style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+          <div className={`status-badge ${health.status === 'ok' ? 'online' : ''}`}>
+            {health.status === 'ok' ? 'API Online' : 'Demo Mode'}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: '#111827', padding: '6px 8px', borderRadius: 10 }}>
+            <label htmlFor="role-picker" style={{ color: '#cbd5e1', fontSize: 12 }}>Role</label>
+            <select id="role-picker" value={authRole} onChange={(event) => handleRoleChange(event.target.value)} style={{ background: '#0f172a', color: '#fff', border: '1px solid #334155', borderRadius: 6, padding: '4px 8px' }}>
+              <option value="analyst">Analyst</option>
+              <option value="manager">Manager</option>
+              <option value="admin">Admin</option>
+            </select>
+          </div>
+          <button className="primary-button">+ New alert</button>
+        </div>
+      </header>
+
+      <section className="stats-grid">
+        <div className="stat-card accent-blue">
+          <span>Total transactions</span>
+          <strong>{summary.total_transactions}</strong>
+        </div>
+        <div className="stat-card accent-orange">
+          <span>Alerts</span>
+          <strong>{summary.alerts_count}</strong>
+        </div>
+        <div className="stat-card accent-red">
+          <span>High-risk</span>
+          <strong>{highRiskCount}</strong>
+        </div>
+        <div className="stat-card accent-green">
+          <span>Average score</span>
+          <strong>{summary.average_score}</strong>
+        </div>
+      </section>
+
+      <section className="content-grid">
+        <div className="panel panel-lg">
+          <div className="panel-header">
+            <h2>Active alerts</h2>
+            <button className="secondary-button">Escalate all</button>
+          </div>
+
+          <div className="alert-list">
+            {alerts.map((alert) => (
+              <article key={alert.alert_id} className="alert-item">
+                <div className="alert-head">
+                  <span className={`severity ${alert.severity}`}>{alert.severity}</span>
+                  <strong>{alert.alert_id}</strong>
+                </div>
+
+                <div className="alert-meta">
+                  <span>Account: {alert.account_id}</span>
+                  <span>Txn: {alert.transaction_id}</span>
+                </div>
+
+                <div className="alert-meta compact">
+                  <span>{alert.country}</span>
+                  <span>{alert.channel}</span>
+                  <span>{alert.amount}</span>
+                </div>
+
+                <p className="score-line">Score: {alert.score}</p>
+                <ul>
+                  {alert.reasons.map((reason) => (
+                    <li key={reason}>{reason}</li>
+                  ))}
+                </ul>
+              </article>
+            ))}
+          </div>
+        </div>
+
+        <aside className="panel panel-side">
+          <div className="panel-header sticky-header">
+            <h2>Investigation queue</h2>
+            <button className="secondary-button">New case</button>
+          </div>
+
+          <div className="filter-row">
+            {['All', 'Open', 'Pending', 'Review'].map((filter) => (
+              <button
+                key={filter}
+                className={activeFilter === filter ? 'filter-button active' : 'filter-button'}
+                onClick={() => setActiveFilter(filter)}
+              >
+                {filter}
+              </button>
+            ))}
+          </div>
+
+          <div className="case-list">
+            {filteredCases.map((caseItem) => (
+              <button
+                key={caseItem.case_id}
+                className={selectedCase?.case_id === caseItem.case_id ? 'case-card selected' : 'case-card'}
+                onClick={() => setSelectedCase(caseItem)}
+              >
+                <div className="case-row">
+                  <strong>{caseItem.case_id}</strong>
+                  <span className={`case-status ${caseItem.status}`}>{caseItem.status}</span>
+                </div>
+                <p>Account: {caseItem.account_id}</p>
+                <p>Analyst: {caseItem.analyst}</p>
+                <div className="case-footer">
+                  <span className="priority-pill">{caseItem.priority}</span>
+                  <span>{caseItem.age}</span>
+                </div>
+              </button>
+            ))}
+          </div>
+        </aside>
+      </section>
+
+      <section className="panel detail-panel">
+        <div className="panel-header detail-header">
+          <div>
+            <p className="eyebrow subtle">CASE DETAIL</p>
+            <h2>{selectedCase?.case_id}</h2>
+          </div>
+          <div className="detail-actions">
+            <button className="secondary-button">Escalate</button>
+            <button className="primary-button">Close case</button>
+          </div>
+        </div>
+
+        <div className="detail-grid">
+          <div>
+            <div className="detail-row">
+              <span>Status</span>
+              <strong>{selectedCase?.status}</strong>
+            </div>
+            <div className="detail-row">
+              <span>Account</span>
+              <strong>{selectedCase?.account_id}</strong>
+            </div>
+            <div className="detail-row">
+              <span>Analyst</span>
+              <strong>{selectedCase?.analyst}</strong>
+            </div>
+          </div>
+
+          <div className="summary-box">
+            <h3>Investigation summary</h3>
+            <p>{selectedCase?.summary}</p>
+          </div>
+        </div>
+
+        <div className="notes-box">
+          <h3>Case notes</h3>
+          <ul>
+            {notes.map((note) => (
+              <li key={note.id}>
+                <strong>{note.author}</strong> — {note.note}
+              </li>
+            ))}
+          </ul>
+        </div>
+      </section>
+
+      <section className="panel sanctions-panel">
+        <div className="panel-header">
+          <h2>Sanctions & KYC monitoring</h2>
+        </div>
+
+        <div className="sanctions-grid">
+          <div className="watchlist-box">
+            <h3>Sanctions watchlist</h3>
+            <ul>
+              {sanctions.map((item) => (
+                <li key={item.id}>
+                  <strong>{item.name}</strong> · {item.country || 'Unknown'} · {item.category}
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="kyc-box">
+            <h3>KYC status</h3>
+            <div className="kyc-row">
+              <span>Account</span>
+              <strong>acct-02</strong>
+            </div>
+            <div className="kyc-row">
+              <span>Risk rating</span>
+              <strong>critical</strong>
+            </div>
+            <div className="kyc-row">
+              <span>Review state</span>
+              <strong>sanctions_review</strong>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="panel full-width">
+        <div className="panel-header">
+          <h2>High-risk account watchlist</h2>
+        </div>
+        <div className="watchlist">
+          {summary.top_risk_accounts.map((account) => (
+            <div key={account} className="watchlist-item">
+              <span>{account}</span>
+              <span className="dot" />
+              <span>Priority review</span>
+            </div>
+          ))}
+        </div>
+      </section>
+    </div>
+  );
+}
+
+export default App;
